@@ -1,4 +1,3 @@
-# src/tracker.py
 import json
 import time
 import shutil
@@ -16,6 +15,7 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     WHITE = '\033[97m'
+    GREY = '\033[90m'
 
 class StatusTracker:
     def __init__(self, log_file: str = "task_status.json"):
@@ -35,8 +35,7 @@ class StatusTracker:
         if self.log_file.exists():
             try:
                 shutil.copy(self.log_file, self.log_file.with_suffix('.json.bak'))
-            except IOError:
-                pass
+            except IOError: pass
         with open(self.log_file, 'w', encoding='utf-8') as f:
             json.dump(self.data, f, indent=4, ensure_ascii=False)
 
@@ -53,9 +52,7 @@ class StatusTracker:
         if record.get("start_time"):
             duration = time.time() - record["start_time"]
             record["duration_sec"] = duration
-            
-            # --- 修复点：去掉下划线 ---
-            record["duration_str"] = self.format_duration(duration) 
+            record["duration_str"] = self.format_duration(duration)
         
         record["status"] = status
         if error_msg:
@@ -63,14 +60,12 @@ class StatusTracker:
         self.save_data()
 
     def set_result(self, mol_name: str, g_val: float):
-        if mol_name not in self.data:
-            self.data[mol_name] = {}
+        if mol_name not in self.data: self.data[mol_name] = {}
         self.data[mol_name]["result_g"] = g_val
         self.save_data()
 
     def _ensure_record(self, mol_name, step):
-        if mol_name not in self.data:
-            self.data[mol_name] = {}
+        if mol_name not in self.data: self.data[mol_name] = {}
         if step not in self.data[mol_name]:
             self.data[mol_name][step] = {
                 "status": "PENDING", "start_time": None, "duration_sec": 0, "duration_str": "", "error": ""
@@ -78,51 +73,90 @@ class StatusTracker:
 
     @staticmethod
     def format_duration(seconds: float) -> str:
-        """格式化时间为 HH:MM:SS (静态方法)"""
         if seconds is None: return ""
         m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
-        parts = []
-        if h > 0: parts.append(f"{h}h")
-        if m > 0: parts.append(f"{m}m")
-        parts.append(f"{s}s")
-        return " ".join(parts)
+        if h > 0: return f"{h}h {m}m"
+        if m > 0: return f"{m}m {s}s"
+        return f"{s}s"
 
     def print_dashboard(self):
+        """清屏并打印严格对齐的仪表盘 (单行显示错误)"""
         os.system('cls' if os.name == 'nt' else 'clear')
-        header = f"{Colors.BOLD}{'MOLECULE':<15} {'OPT':<18} {'GAS':<18} {'SOLV':<18} {'SP':<18} {'G(kcal/mol)':<15}{Colors.ENDC}"
-        print(f"\n{Colors.BOLD}{'='*105}{Colors.ENDC}")
+
+        # 定义列宽
+        W_MOL = 16
+        W_STEP = 16
+        W_G = 14
+        
+        # 表头
+        # 这里的格式化必须和下面 row 的格式化完全一致
+        header = (
+            f"{Colors.BOLD}"
+            f"{'MOLECULE':<{W_MOL}} "
+            f"{'OPT':<{W_STEP}} {'GAS':<{W_STEP}} {'SOLV':<{W_STEP}} {'SP':<{W_STEP}} "
+            f"{'G(kcal)':<{W_G}} {'NOTE'}"
+            f"{Colors.ENDC}"
+        )
+        
+        print(f"\n{Colors.BOLD}{'='*120}{Colors.ENDC}")
         print(header)
-        print(f"{Colors.BOLD}{'-'*105}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{'-'*120}{Colors.ENDC}")
         
         for mol_name in sorted(self.data.keys()):
             steps = self.data[mol_name]
-            row = f"{Colors.CYAN}{mol_name:<15}{Colors.ENDC}"
+            
+            # 1. 分子名
+            row = f"{Colors.CYAN}{mol_name[:W_MOL-1]:<{W_MOL}}{Colors.ENDC} "
+            
+            # 收集错误信息，放在最后显示
+            error_notes = []
+
+            # 2. 步骤状态
             for step in ["opt", "gas", "solv", "sp"]:
                 info = steps.get(step, {})
                 st = info.get("status", "PENDING")
                 dur = info.get("duration_str", "")
+                err = info.get("error", "")
+
+                content = ""
+                color = Colors.GREY
+                
                 if st == "DONE":
-                    txt = f"DONE {dur}" if dur else "DONE"
-                    colored = f"{Colors.GREEN}[{txt}]{Colors.ENDC}"
+                    content = f"DONE {dur}" if dur else "DONE"
+                    color = Colors.GREEN
                 elif st == "RUNNING":
-                    colored = f"{Colors.YELLOW}[RUNNING]{Colors.ENDC}"
+                    content = "RUNNING..."
+                    color = Colors.YELLOW
                 elif st == "ERROR":
-                    colored = f"{Colors.RED}[ERROR]{Colors.ENDC}"
+                    content = "ERROR"
+                    color = Colors.RED
+                    if err: error_notes.append(f"{step.upper()}:{err}")
                 else:
-                    colored = f"[{st}]"
-                row += f"{colored:<28}"
-            
+                    content = "PENDING"
+                    color = Colors.GREY
+                
+                # 格式化单元格: [CONTENT]
+                cell_text = f"[{content}]"
+                # ANSI 颜色字符不占用视觉宽度，但占字符串长度，所以要单独处理填充
+                # 这里简单处理：让颜色代码紧贴文字
+                row += f"{color}{cell_text:<{W_STEP}}{Colors.ENDC} "
+
+            # 3. G值
             res = steps.get("result_g")
             if res is not None:
-                row += f"{Colors.WHITE}{Colors.BOLD}{res:.2f}{Colors.ENDC}"
+                row += f"{Colors.WHITE}{Colors.BOLD}{res:<{W_G}.2f}{Colors.ENDC} "
             else:
-                row += f"{'-':<15}"
-            print(row)
-            
-            for step, info in steps.items():
-                if isinstance(info, dict) and info.get("status") == "ERROR" and info.get("error"):
-                    print(f"  └── {Colors.RED}{step.upper()} Failed: {info['error']}{Colors.ENDC}")
+                row += f"{Colors.GREY}{'-':<{W_G}}{Colors.ENDC} "
 
-        print(f"{Colors.BOLD}{'='*105}{Colors.ENDC}")
+            # 4. Note (显示在一行)
+            if error_notes:
+                note_str = " | ".join(error_notes)
+                # 截断过长的错误信息
+                if len(note_str) > 30: note_str = note_str[:27] + "..."
+                row += f"{Colors.RED}{note_str}{Colors.ENDC}"
+            
+            print(row)
+
+        print(f"{Colors.BOLD}{'='*120}{Colors.ENDC}")
         print(f"{Colors.YELLOW}Real-time Status:{Colors.ENDC}")

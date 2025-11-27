@@ -1,8 +1,7 @@
-# main.py
 import time
+import sys
 from pathlib import Path
 
-# 导入核心模块
 from src import config
 from src.parsers import get_parser
 from src.opt_generator import OptGenerator
@@ -10,52 +9,47 @@ from src.sub_generator import SubGenerator
 from src.job_manager import JobManager
 from src.tracker import StatusTracker
 from src.calculator import ThermodynamicsCalculator
+from src.sweeper import TaskSweeper  # [新增导入]
 
 def scan_xyz(xyz_dir: Path):
     if not xyz_dir.exists(): return []
     files = list(xyz_dir.glob("*.xyz"))
-    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    # 按修改时间正序 (优先处理旧的，保证队列顺序)
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=False)
     return files
 
 def main():
+    # 初始化
     tracker = StatusTracker()
     manager = JobManager(tracker=tracker)
     opt_gen = OptGenerator()
     sub_gen = SubGenerator()
+    sweeper = TaskSweeper(manager) # [新增实例]
     
-    # 打印一些启动信息
-    print(f"🚀 Gibbs Workflow Started | XYZ Dir: {config.XYZ_DIR}")
+    # 确保目录存在
+    config.SWEEPER_DIR.mkdir(exist_ok=True)
+    
+    print(f"🚀 Gibbs Workflow | XYZ: {config.XYZ_DIR} | Sweeper: {config.SWEEPER_DIR}")
 
     while True:
         xyz_files = scan_xyz(config.XYZ_DIR)
         
-        if not xyz_files:
-            # 如果没有文件，就只打印一行等待信息（或者也可以清屏显示空表）
-            # 这里选择简单的等待，避免空表太难看
-            print("💤 Waiting for XYZ files (60s)...")
-            time.sleep(60)
-            continue
-        
-        # 每次循环开始刷新仪表盘
+        # 刷新仪表盘
         tracker.print_dashboard()
-        
         action_taken = False
         
+        # === 1. 主线任务循环 (XYZ -> G) ===
         for xyz in xyz_files:
             mol = xyz.stem
             
-            # =========================================================
-            # STAGE 1: OPTIMIZATION
-            # =========================================================
+            # --- STAGE 1: OPT ---
             opt_in = None
             for e in config.VALID_EXTENSIONS:
                 if (config.DIRS["opt"] / f"{mol}_opt{e}").exists():
-                    opt_in = config.DIRS["opt"] / f"{mol}_opt{e}"
-                    break
+                    opt_in = config.DIRS["opt"] / f"{mol}_opt{e}"; break
             
             if not opt_in:
                 try:
-                    # 可以在下方状态栏显示正在生成
                     print(f"\r✨ Generating OPT for {mol}...", end="")
                     opt_in = opt_gen.generate(xyz)
                     action_taken = True
@@ -80,11 +74,9 @@ def main():
                 action_taken = True
             else: # RUNNING
                 tracker.start_task(mol, "opt")
-                continue # 既然是阻塞式，遇到外部正在跑的，我们跳过等待
+                continue 
 
-            # =========================================================
-            # STAGE 2: SUB-TASKS (GAS, SOLV, SP)
-            # =========================================================
+            # --- STAGE 2: SUBS ---
             subs = ["gas", "solv", "sp"]
             need_gen = any(not any((config.DIRS[t]/f"{mol}_{t}{e}").exists() for e in config.VALID_EXTENSIONS) for t in subs)
             
@@ -116,45 +108,42 @@ def main():
                     action_taken = True
                 else:
                     tracker.start_task(mol, t)
-                    grp_fail = True; break # 正在跑，跳过本组
+                    grp_fail = True; break
             
             if grp_fail: continue
 
-            # =========================================================
-            # STAGE 3: CALCULATION
-            # =========================================================
-            # 如果还没有结果，尝试计算
+            # --- STAGE 3: CALC ---
             if "result_g" not in tracker.data.get(mol, {}):
                 try:
                     energies = {"thermal_corr": get_parser(opt_out).get_thermal_correction()}
                     for t in subs:
                         f = next((config.DIRS[t]/f"{mol}_{t}{e}" for e in [".out", ".log"] if (config.DIRS[t]/f"{mol}_{t}{e}").exists()), None)
-                        if not f: raise FileNotFoundError(f"No out for {t}")
+                        if not f: raise FileNotFoundError
                         energies[t] = get_parser(f).get_electronic_energy()
                     
                     res = ThermodynamicsCalculator.calculate_g(energies, mol)
-                    
-                    # 1. 保存到 CSV
                     ThermodynamicsCalculator.update_csv(mol, energies, res)
-                    
-                    # 2. [新增] 保存到 Tracker 以显示在表格里
-                    final_g_val = res['G_Final (kcal)']
-                    tracker.set_result(mol, final_g_val)
-                    
-                    # 3. 立即重绘一次 Dashboard，让用户看到结果出来了
+                    tracker.set_result(mol, res['G_Final (kcal)'])
                     tracker.print_dashboard()
-                    
-                except Exception: 
-                    # 可能数据还没齐，或者解析出错，暂不处理，等下轮
-                    pass
+                except: pass
 
             if action_taken: break
         
+        # === 2. 清扫模式 (Task Sweeper) ===
+        # 只有当主线任务没有动作时，才去跑杂活
         if not action_taken:
-            # 使用回车符覆盖上一行的 "Running..."，显示休眠倒计时
-            # 这里简单做个 sleep，下次循环 tracker.print_dashboard 会清屏覆盖
-            print("\r💤 No actions taken, sleeping 60s...", end="")
-            time.sleep(60)
+            sweeper_active = sweeper.run()
+            if sweeper_active:
+                action_taken = True
+
+        # === 3. 休眠 ===
+        if not action_taken:
+            print("\r💤 No tasks pending. Scanning in 60s...", end="")
+            try:
+                time.sleep(60)
+            except KeyboardInterrupt:
+                print("\nEXIT.")
+                sys.exit(0)
 
 if __name__ == "__main__":
     main()
