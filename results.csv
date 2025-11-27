@@ -1,3 +1,0 @@
-Molecule,G_Final (kcal/mol),E_SP (Ha),E_Gas (Ha),E_Solv (Ha),Thermal_Corr (Ha),dG_Solv (kcal/mol),G_Final (Ha)
-test_mock,-48033.960235,-76.500000,-76.100000,-76.200000,0.050000,-62.750947,-76.546988
-test_mol,-48033.960235,-76.500000,-76.100000,-76.200000,0.050000,-62.750947,-76.546988
