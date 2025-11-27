@@ -9,18 +9,25 @@ from .tracker import StatusTracker
 class JobManager:
     def __init__(self, tracker=None):
         self.tracker = tracker
-        self.last_interrupt_time = 0.0 # 用于检测双击 Ctrl+C
+        self.last_int = 0.0
 
     def get_status_from_file(self, filepath: Path, is_opt: bool = False) -> tuple[str, str]:
         if not filepath.exists(): return "MISSING", ""
         try:
             parser = get_parser(filepath)
+            
+            # [修改点] 优先检查是否明确报错
+            if parser.is_failed():
+                return "ERROR", "Program Terminated with Error"
+                
             if not parser.is_finished(): return "RUNNING", ""
-            if is_opt and not parser.is_converged(): return "ERROR", "Opt Not Converged"
-            if is_opt and parser.has_imaginary_freq(): return "ERROR", "Imaginary Freq"
+            
+            if is_opt and not parser.is_converged(): return "ERROR", "Optimization not converged"
+            if is_opt and parser.has_imaginary_freq(): return "ERROR", "Imaginary freq detected"
             return "DONE", ""
         except Exception as e:
-            return "ERROR", str(e)
+            # 如果解析本身报错（比如文件内容截断/乱码），也视为 Error
+            return "ERROR", f"Parse Error: {str(e)}"
 
     def submit_and_wait(self, job_file: Path, mol_name: str, step: str) -> bool:
         ext = job_file.suffix
@@ -53,20 +60,18 @@ class JobManager:
                 time.sleep(1) 
                 
         except KeyboardInterrupt:
-            # === 双击 Ctrl+C 逻辑 ===
-            current_time = time.time()
-            if current_time - self.last_interrupt_time < 1.0:
-                print("\n\n🛑 Double Ctrl+C detected. Exiting script completely.")
+            curr = time.time()
+            if curr - self.last_int < 1.0:
+                print("\nDouble Ctrl+C. Exiting.")
                 proc.kill()
                 sys.exit(0)
             else:
-                self.last_interrupt_time = current_time
-                print("\n\n⚠️ Ctrl+C detected. Skipping current task... (Press again to exit)")
+                self.last_int = curr
+                print("\nSkipping task...")
                 proc.kill()
-                if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", "Skipped by User")
+                if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", "Skipped")
                 return False
 
-        # 检查结果
         status, err = self.get_status_from_file(output_file, is_opt=(step=="opt"))
         
         if status == "DONE":

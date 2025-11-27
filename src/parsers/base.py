@@ -1,80 +1,40 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional # [修改] 引入 Optional
 
 class BaseParser(ABC):
     def __init__(self, filepath: Path):
         self.filepath = filepath
-        self.content = self._read_file(filepath)
-
-    def _read_file(self, filepath: Path) -> str:
-        if not filepath.exists():
-            raise FileNotFoundError(f"File not found: {filepath}")
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-        except UnicodeDecodeError:
-            with open(filepath, 'r', encoding='latin-1') as f:
-                return f.read()
+        # 使用 errors='ignore' 防止读取二进制乱码导致崩溃
+        with open(filepath, 'r', encoding='latin-1', errors='ignore') as f: 
+            self.content = f.read()
 
     @classmethod
     @abstractmethod
-    def detect(cls, content: str) -> bool:
-        pass
-
-    @abstractmethod
-    def is_finished(self) -> bool:
-        pass
-
-    @abstractmethod
-    def is_converged(self) -> bool:
-        pass
+    def detect(cls, content: str) -> bool: pass
     
     @abstractmethod
-    def has_imaginary_freq(self) -> bool:
-        pass
-
-    # --- 拆分后的新接口 ---
+    def is_finished(self) -> bool: pass
+    
     @abstractmethod
-    def get_charge_mult(self) -> Tuple[int, int]:
-        """提取电荷与多重度"""
-        pass
-
+    def is_failed(self) -> bool: pass
+    
     @abstractmethod
-    def get_coordinates(self) -> str:
-        """提取优化后的坐标 (格式化为 XYZ 字符串)"""
-        pass
-    # --------------------
-
+    def is_converged(self) -> bool: pass
+    
     @abstractmethod
-    def get_electronic_energy(self) -> Optional[float]:
-        pass
-
+    def has_imaginary_freq(self) -> bool: pass
+    
     @abstractmethod
-    def get_thermal_correction(self) -> Optional[float]:
-        pass
-
-    def parse_all(self) -> Dict[str, Any]:
-        """辅助方法：提取所有数据"""
-        data = {
-            "parser_type": self.__class__.__name__,
-            "file": self.filepath.name,
-            "is_finished": self.is_finished(),
-            "is_converged": self.is_converged(),
-            "has_imaginary": self.has_imaginary_freq(),
-            "energy": self.get_electronic_energy(),
-            "thermal_corr": self.get_thermal_correction(),
-            "charge_mult": None,
-            "coords": None,
-            "error": None
-        }
-        
-        try:
-            # 只有收敛了才去抓坐标，或者你想强制抓取也行
-            if self.is_converged() or self.is_finished(): 
-                data["charge_mult"] = self.get_charge_mult()
-                data["coords"] = self.get_coordinates()
-        except ValueError as e:
-            data["error"] = str(e)
-            
-        return data
+    def get_charge_mult(self) -> Tuple[int, int]: pass
+    
+    @abstractmethod
+    def get_coordinates(self) -> str: pass
+    
+    # [修改] 返回类型改为 Optional[float]，允许返回 None
+    @abstractmethod
+    def get_electronic_energy(self) -> Optional[float]: pass
+    
+    # [修改] 返回类型改为 Optional[float]
+    @abstractmethod
+    def get_thermal_correction(self) -> Optional[float]: pass
