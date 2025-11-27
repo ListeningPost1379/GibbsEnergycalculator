@@ -26,7 +26,7 @@ GAUSSIAN_TEMPLATE = """
 """
 
 # --- ORCA 模板 ---
-# 必须包含 src/parsers/orca.py 所需的所有关键词
+# [修复] 增加了 "THE OPTIMIZATION HAS CONVERGED"
 ORCA_TEMPLATE = """
                                  * O   R   C   A *
            * O   R   C   A *
@@ -35,6 +35,8 @@ ORCA_TEMPLATE = """
  Multiplicity           Mult            ...    {mult}
 
  FINAL SINGLE POINT ENERGY       {energy}
+
+      THE OPTIMIZATION HAS CONVERGED
 
  VIBRATIONAL FREQUENCIES
     0:   100.50 cm**-1
@@ -53,7 +55,12 @@ ORCA_TEMPLATE = """
  ****ORCA TERMINATED NORMALLY****
 """
 
-FAIL_TEMPLATE = "Error termination / ORCA finished by error"
+# [优化] 让错误文件也带有 Gaussian 头部，防止报 "Unsupported format"
+FAIL_TEMPLATE = """
+ Entering Gaussian System
+ Charge = 0 Multiplicity = 1
+ Error termination via Lnk1e.
+"""
 
 def run():
     # Usage: python mock_engine.py <input> <output>
