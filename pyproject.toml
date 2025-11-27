@@ -1,10 +1,19 @@
 [project]
-name = "gibbsenergy"
-version = "0.1.0"
-description = "Add your description here"
+name = "gibbs-energy-workflow"
+version = "1.0.0"
+description = "Automated Gibbs Free Energy Calculation Workflow"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 dependencies = [
-    "numpy>=2.3.5",
-    "pandas>=2.3.3",
+    "pandas>=2.0.0",
+    "numpy>=1.20.0"
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# --- 关键修复在这里 ---
+# 显式告诉 hatchling，把 src 目录下的所有东西当成源代码包
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

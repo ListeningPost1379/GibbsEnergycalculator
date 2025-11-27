@@ -2,6 +2,7 @@
 import json
 import time
 import shutil
+import os
 from pathlib import Path
 from typing import Dict, Any
 
@@ -9,11 +10,12 @@ class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
     CYAN = '\033[96m'
-    GREEN = '\033[92m'   # 完成
-    YELLOW = '\033[93m'  # 进行中
-    RED = '\033[91m'     # 失败
-    ENDC = '\033[0m'     # 重置
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
     BOLD = '\033[1m'
+    WHITE = '\033[97m'
 
 class StatusTracker:
     def __init__(self, log_file: str = "task_status.json"):
@@ -21,7 +23,6 @@ class StatusTracker:
         self.data = self._load_data()
 
     def _load_data(self) -> Dict[str, Any]:
-        """加载历史记录"""
         if self.log_file.exists():
             try:
                 with open(self.log_file, 'r', encoding='utf-8') as f:
@@ -31,40 +32,40 @@ class StatusTracker:
         return {}
 
     def save_data(self):
-        """保存记录到文件 (含备份)"""
         if self.log_file.exists():
             try:
                 shutil.copy(self.log_file, self.log_file.with_suffix('.json.bak'))
             except IOError:
-                pass 
-        
+                pass
         with open(self.log_file, 'w', encoding='utf-8') as f:
             json.dump(self.data, f, indent=4, ensure_ascii=False)
 
     def start_task(self, mol_name: str, step: str):
-        """标记任务开始"""
         self._ensure_record(mol_name, step)
         self.data[mol_name][step]["status"] = "RUNNING"
-        # 如果是重跑，更新开始时间
         self.data[mol_name][step]["start_time"] = time.time()
         self.data[mol_name][step]["error"] = ""
         self.save_data()
 
     def finish_task(self, mol_name: str, step: str, status: str, error_msg: str = ""):
-        """标记任务结束 (DONE or ERROR)"""
         self._ensure_record(mol_name, step)
         record = self.data[mol_name][step]
-        
-        # 计算耗时
         if record.get("start_time"):
-            duration_sec = time.time() - record["start_time"]
-            record["duration_sec"] = duration_sec
-            record["duration_str"] = self._format_duration(duration_sec)
+            duration = time.time() - record["start_time"]
+            record["duration_sec"] = duration
+            
+            # --- 修复点：去掉下划线 ---
+            record["duration_str"] = self.format_duration(duration) 
         
         record["status"] = status
         if error_msg:
             record["error"] = error_msg
-        
+        self.save_data()
+
+    def set_result(self, mol_name: str, g_val: float):
+        if mol_name not in self.data:
+            self.data[mol_name] = {}
+        self.data[mol_name]["result_g"] = g_val
         self.save_data()
 
     def _ensure_record(self, mol_name, step):
@@ -72,66 +73,56 @@ class StatusTracker:
             self.data[mol_name] = {}
         if step not in self.data[mol_name]:
             self.data[mol_name][step] = {
-                "status": "PENDING",
-                "start_time": None,
-                "duration_sec": 0,
-                "duration_str": "",
-                "error": ""
+                "status": "PENDING", "start_time": None, "duration_sec": 0, "duration_str": "", "error": ""
             }
 
-    def _format_duration(self, seconds: float) -> str:
+    @staticmethod
+    def format_duration(seconds: float) -> str:
+        """格式化时间为 HH:MM:SS (静态方法)"""
         if seconds is None: return ""
-        m, s = divmod(seconds, 60)
+        m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
         parts = []
-        if h > 0: parts.append(f"{int(h)}h")
-        if m > 0: parts.append(f"{int(m)}m")
-        parts.append(f"{int(s)}s")
+        if h > 0: parts.append(f"{h}h")
+        if m > 0: parts.append(f"{m}m")
+        parts.append(f"{s}s")
         return " ".join(parts)
 
     def print_dashboard(self):
-        """打印彩色状态面板"""
-        print(f"\n{Colors.BOLD}{'='*95}{Colors.ENDC}")
-        # 表头
-        print(f"{Colors.BOLD}{'MOLECULE':<15} {'OPT':<20} {'GAS':<20} {'SOLV':<20} {'SP':<20}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{'-'*95}{Colors.ENDC}")
-
-        # 简单排序：按分子名
-        sorted_mols = sorted(self.data.keys())
-
-        for mol_name in sorted_mols:
+        os.system('cls' if os.name == 'nt' else 'clear')
+        header = f"{Colors.BOLD}{'MOLECULE':<15} {'OPT':<18} {'GAS':<18} {'SOLV':<18} {'SP':<18} {'G(kcal/mol)':<15}{Colors.ENDC}"
+        print(f"\n{Colors.BOLD}{'='*105}{Colors.ENDC}")
+        print(header)
+        print(f"{Colors.BOLD}{'-'*105}{Colors.ENDC}")
+        
+        for mol_name in sorted(self.data.keys()):
             steps = self.data[mol_name]
-            row_str = f"{Colors.CYAN}{mol_name:<15}{Colors.ENDC}"
-            
-            # 依次打印四个步骤的状态
+            row = f"{Colors.CYAN}{mol_name:<15}{Colors.ENDC}"
             for step in ["opt", "gas", "solv", "sp"]:
                 info = steps.get(step, {})
-                status = info.get("status", "PENDING")
-                duration = info.get("duration_str", "")
-                
-                # 颜色与格式逻辑
-                if status == "DONE":
-                    # 显示: [DONE 1h 2m] (绿色)
-                    text = f"DONE {duration}" if duration else "DONE"
-                    colored_text = f"{Colors.GREEN}[{text}]{Colors.ENDC}"
-                elif status == "RUNNING":
-                    # 显示: [RUNNING...] (黄色)
-                    colored_text = f"{Colors.YELLOW}[RUNNING...]{Colors.ENDC}"
-                elif status == "ERROR":
-                    # 显示: [ERROR] (红色)
-                    colored_text = f"{Colors.RED}[ERROR]{Colors.ENDC}"
+                st = info.get("status", "PENDING")
+                dur = info.get("duration_str", "")
+                if st == "DONE":
+                    txt = f"DONE {dur}" if dur else "DONE"
+                    colored = f"{Colors.GREEN}[{txt}]{Colors.ENDC}"
+                elif st == "RUNNING":
+                    colored = f"{Colors.YELLOW}[RUNNING]{Colors.ENDC}"
+                elif st == "ERROR":
+                    colored = f"{Colors.RED}[ERROR]{Colors.ENDC}"
                 else:
-                    # 显示: [PENDING] (灰色)
-                    colored_text = f"[{status}]"
-                
-                # <30 是为了留足空间给ANSI颜色代码
-                row_str += f"{colored_text:<30}" 
+                    colored = f"[{st}]"
+                row += f"{colored:<28}"
             
-            print(row_str)
+            res = steps.get("result_g")
+            if res is not None:
+                row += f"{Colors.WHITE}{Colors.BOLD}{res:.2f}{Colors.ENDC}"
+            else:
+                row += f"{'-':<15}"
+            print(row)
             
-            # 如果有错误，在下方单独打印详情
             for step, info in steps.items():
-                if info.get("status") == "ERROR" and info.get("error"):
+                if isinstance(info, dict) and info.get("status") == "ERROR" and info.get("error"):
                     print(f"  └── {Colors.RED}{step.upper()} Failed: {info['error']}{Colors.ENDC}")
 
-        print(f"{Colors.BOLD}{'='*95}{Colors.ENDC}\n")
+        print(f"{Colors.BOLD}{'='*105}{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Real-time Status:{Colors.ENDC}")

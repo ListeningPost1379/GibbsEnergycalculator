@@ -1,0 +1,63 @@
+{
+    "test_mol": {
+        "opt": {
+            "status": "DONE",
+            "start_time": 1764223896.0872784,
+            "duration_sec": 1.0017948150634766,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "gas": {
+            "status": "DONE",
+            "start_time": 1764223897.0906115,
+            "duration_sec": 1.0107660293579102,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "solv": {
+            "status": "DONE",
+            "start_time": 1764223898.1025963,
+            "duration_sec": 1.0131540298461914,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "sp": {
+            "status": "DONE",
+            "start_time": 1764223899.1172073,
+            "duration_sec": 1.0131709575653076,
+            "duration_str": "1s",
+            "error": ""
+        }
+    },
+    "test_mock": {
+        "opt": {
+            "status": "DONE",
+            "start_time": 1764223892.0573893,
+            "duration_sec": 1.0016508102416992,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "gas": {
+            "status": "DONE",
+            "start_time": 1764223893.060611,
+            "duration_sec": 1.0017952919006348,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "solv": {
+            "status": "DONE",
+            "start_time": 1764223894.0627167,
+            "duration_sec": 1.0022754669189453,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "sp": {
+            "status": "DONE",
+            "start_time": 1764223895.0666094,
+            "duration_sec": 1.0145816802978516,
+            "duration_str": "1s",
+            "error": ""
+        },
+        "result_g": -48033.960234700004
+    }
+}

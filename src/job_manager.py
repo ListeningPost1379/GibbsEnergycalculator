@@ -1,108 +1,90 @@
 # src/job_manager.py
 import subprocess
 import time
+import sys
 from pathlib import Path
 from . import config
 from .parsers import get_parser
+from .tracker import StatusTracker # 导入用于格式化时间
 
 class JobManager:
-    """
-    任务管理器：负责提交任务并监控其运行状态 (阻塞模式)
-    """
     def __init__(self, tracker=None):
-        self.tracker = tracker # 用于回调更新状态
+        self.tracker = tracker
 
     def get_status_from_file(self, filepath: Path, is_opt: bool = False) -> tuple[str, str]:
-        """
-        通过解析输出文件判断任务状态
-        Returns: (status, error_msg)
-        Status enum: "DONE", "RUNNING", "ERROR", "MISSING"
-        """
-        if not filepath.exists():
-            return "MISSING", ""
-        
+        # 这个函数逻辑不变，负责最后验尸
+        if not filepath.exists(): return "MISSING", ""
         try:
-            # 使用 Parser 模块解析
             parser = get_parser(filepath)
-            
-            # 1. 检查程序是否正常结束
-            if not parser.is_finished():
-                # 文件存在但未写完结束语，视为运行中
-                return "RUNNING", ""
-            
-            # 2. 如果是 Opt 任务，必须检查收敛
-            if is_opt and not parser.is_converged():
-                return "ERROR", "Optimization not converged"
-            
-            # 3. 检查虚频 (根据需求，有虚频视为错误)
-            if is_opt and parser.has_imaginary_freq():
-                 return "ERROR", "Imaginary frequency detected"
-            
+            if not parser.is_finished(): return "RUNNING", "" # 理论上如果是本脚本跑的，不会走到这
+            if is_opt and not parser.is_converged(): return "ERROR", "Optimization not converged"
+            if is_opt and parser.has_imaginary_freq(): return "ERROR", "Imaginary freq detected"
             return "DONE", ""
-
         except Exception as e:
-            # 解析发生异常，通常意味着文件格式错误或被截断
             return "ERROR", str(e)
 
     def submit_and_wait(self, job_file: Path, mol_name: str, step: str) -> bool:
         """
-        【阻塞式】提交任务并轮询等待完成
-        Returns: True (成功), False (失败)
+        提交任务，并实时显示耗时，直到进程结束
         """
-        # 1. 准备命令
         ext = job_file.suffix
         cmd_template = config.COMMAND_MAP.get(ext)
-        
         if not cmd_template:
-            err_msg = f"No command configured for extension {ext}"
-            print(f"  ❌ {err_msg}")
-            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", err_msg)
+            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", f"No command for {ext}")
             return False
 
-        # 推断输出文件名 (同名 .out)
         output_file = job_file.with_suffix(".out")
-        
-        # 格式化命令
         cmd = cmd_template.format(input=str(job_file), output=str(output_file))
         
-        # 2. 记录开始
-        print(f"  🚀 [Submit] {mol_name} - {step.upper()}")
-        if self.tracker: self.tracker.start_task(mol_name, step)
-        
-        # 3. 启动进程
+        # 1. 更新 Tracker (标记为 Running，Main.py 会重绘一次 Dashboard 显示 Running)
+        if self.tracker: 
+            self.tracker.start_task(mol_name, step)
+            # 这里的重绘是为了让 Dashboard 上显示该任务变成黄色 Running
+            # 注意：Main.py 循环里也会重绘，这里手动重绘确保 UI 同步
+            self.tracker.print_dashboard()
+
+        # 2. 启动进程
         try:
-            # 启动后台进程，不阻塞 Python，以便我们手动轮询
+            # 关键：我们保留 proc 对象，不要用 DEVNULL 吞掉所有东西，但这里为了UI整洁还是吞掉 stdout
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
-            print(f"  ❌ Submission failed: {e}")
             if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", str(e))
             return False
 
-        # 4. 阻塞等待循环 (Polling)
-        print(f"  ⏳ Waiting for {step}...", end="", flush=True)
+        # 3. 实时监控循环 (UI Update Loop)
+        start_time = time.time()
         
-        POLL_INTERVAL = 30 # 轮询间隔 (秒)
-        
-        while True:
-            # 检查输出文件状态
-            status, err = self.get_status_from_file(output_file, is_opt=(step=="opt"))
-            
-            if status == "DONE":
-                print(f"\r  ✅ {step.upper()} Finished!            ")
-                if self.tracker: self.tracker.finish_task(mol_name, step, "DONE")
-                return True
-            
-            elif status == "ERROR":
-                print(f"\r  ❌ {step.upper()} Failed: {err}        ")
-                if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", err)
-                return False
-            
-            # 检查进程是否意外退出 (文件是 MISSING 但进程也没了)
-            if proc.poll() is not None and status == "MISSING":
-                 err = "Process exited but no output generated."
-                 print(f"\r  ❌ {step.upper()} Crashed: {err}")
-                 if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", err)
-                 return False
+        try:
+            # 只要进程没结束 (poll() 返回 None)，就一直循环
+            while proc.poll() is None:
+                elapsed = time.time() - start_time
+                time_str = StatusTracker.format_duration(elapsed)
+                
+                # \r 回到行首，\033[K 清除当前行之后的内容 (防止残留字符)
+                # 这样就在底部实现了秒级跳动的计时器
+                sys.stdout.write(f"\r⏳ Running: {mol_name} [{step.upper()}] ... Time: {time_str}")
+                sys.stdout.flush()
+                
+                # 这里的 sleep 只是为了刷新率，越短界面越流畅，对性能无影响
+                time.sleep(1) 
+                
+        except KeyboardInterrupt:
+            # 如果用户按 Ctrl+C，尝试杀掉计算进程
+            proc.kill()
+            print("\n❌ Task interrupted by user.")
+            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", "Interrupted")
+            raise # 把异常抛给 Main 去处理退出
 
-            # 等待下一轮检查
-            time.sleep(POLL_INTERVAL)
+        # 4. 进程结束了！立即检查结果
+        # 先换行，避免覆盖掉最后一次的时间显示 (或者根据需求不换行直接重绘 Dashboard)
+        # 这里我们不打印 Newline，因为 Main 循环马上会重绘 Dashboard，直接覆盖掉这行更好看
+        
+        status, err = self.get_status_from_file(output_file, is_opt=(step=="opt"))
+        
+        if status == "DONE":
+            # 只要更新了 Tracker，下一次 print_dashboard 就会显示绿色 DONE
+            if self.tracker: self.tracker.finish_task(mol_name, step, "DONE")
+            return True
+        else:
+            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", err)
+            return False
