@@ -1,3 +1,4 @@
+import os
 import time, sys
 import threading
 from pathlib import Path
@@ -138,4 +139,8 @@ def main():
     app = GibbsApp(workflow_loop, tracker, mgr, stop_event)
     app.run()
 
-if __name__ == "__main__": main()
+if __name__ == "__main__": 
+    main()
+    # --- 新增：程序退出后强制重置终端显示 ---
+    # 这会清除 TUI 的残留图像
+    os.system('cls' if os.name == 'nt' else 'reset')
