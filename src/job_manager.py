@@ -12,36 +12,49 @@ class JobManager:
         self.last_int = 0.0
 
     def get_status_from_file(self, filepath: Path, is_opt: bool = False) -> tuple[str, str]:
-        if not filepath.exists(): return "MISSING", ""
+        """
+        仅基于文件内容判断状态。绝不返回 RUNNING。
+        """
+        if not filepath.exists():
+            return "MISSING", ""
+        
         try:
             parser = get_parser(filepath)
             
-            # [修改点] 优先检查是否明确报错
+            # 1. 致命错误检查
             if parser.is_failed():
-                return "ERROR", "Program Terminated with Error"
-                
-            if not parser.is_finished(): return "RUNNING", ""
+                return "ERROR", "Prog Error"
             
-            if is_opt and not parser.is_converged(): return "ERROR", "Optimization not converged"
-            if is_opt and parser.has_imaginary_freq(): return "ERROR", "Imaginary freq detected"
+            # 2. 完整性检查 (如果程序中断，文件没写完，视为错误)
+            if not parser.is_finished():
+                return "ERROR", "Incomplete" 
+
+            # 3. 优化任务特有检查
+            if is_opt:
+                if not parser.is_converged():
+                    return "ERR_NC", "Not Converged"
+                if parser.has_imaginary_freq():
+                    return "ERR_IMG", "Imag Freq"
+            
             return "DONE", ""
+            
         except Exception as e:
-            # 如果解析本身报错（比如文件内容截断/乱码），也视为 Error
-            return "ERROR", f"Parse Error: {str(e)}"
+            return "ERROR", str(e)
 
     def submit_and_wait(self, job_file: Path, mol_name: str, step: str) -> bool:
         ext = job_file.suffix
         cmd_template = config.COMMAND_MAP.get(ext)
         if not cmd_template:
-            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", f"No cmd for {ext}")
+            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", f"No cmd {ext}")
             return False
 
         output_file = job_file.with_suffix(".out")
         cmd = cmd_template.format(input=str(job_file), output=str(output_file))
         
+        # --- 显式设置 RUNNING 状态 ---
         if self.tracker: 
             self.tracker.start_task(mol_name, step)
-            self.tracker.print_dashboard()
+            self.tracker.print_dashboard() # 立即刷新让用户看到 RUNNING
 
         try:
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -50,33 +63,22 @@ class JobManager:
             return False
 
         start_time = time.time()
-        
         try:
             while proc.poll() is None:
-                elapsed = time.time() - start_time
-                time_str = StatusTracker.format_duration(elapsed)
-                sys.stdout.write(f"\r⏳ Running: {mol_name} [{step.upper()}] ... {time_str}   ")
+                elap = time.time() - start_time
+                # 终端动态显示，不依赖文件
+                sys.stdout.write(f"\r⏳ Running: {mol_name} [{step.upper()}] ... {elap/60:.1f} min   ")
                 sys.stdout.flush()
-                time.sleep(1) 
-                
+                time.sleep(1)
         except KeyboardInterrupt:
-            curr = time.time()
-            if curr - self.last_int < 1.0:
-                print("\nDouble Ctrl+C. Exiting.")
-                proc.kill()
-                sys.exit(0)
-            else:
-                self.last_int = curr
-                print("\nSkipping task...")
-                proc.kill()
-                if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", "Skipped")
-                return False
-
-        status, err = self.get_status_from_file(output_file, is_opt=(step=="opt"))
-        
-        if status == "DONE":
-            if self.tracker: self.tracker.finish_task(mol_name, step, "DONE")
-            return True
-        else:
-            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", err)
+            if time.time() - self.last_int < 1.0:
+                proc.kill(); sys.exit(0)
+            self.last_int = time.time()
+            proc.kill()
+            if self.tracker: self.tracker.finish_task(mol_name, step, "ERROR", "User Skipped")
             return False
+
+        # --- 任务结束后，通过文件判断最终状态 ---
+        status, err = self.get_status_from_file(output_file, is_opt=(step=="opt"))
+        if self.tracker: self.tracker.finish_task(mol_name, step, status, err)
+        return status == "DONE"
