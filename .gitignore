@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+uv.lock
+*.code-workspace
 
 # 忽略计算数据，但保留目录结构（如果目录内有 .gitkeep）
 data/opt/*
