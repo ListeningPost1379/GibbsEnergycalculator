@@ -1,4 +1,3 @@
-# src/sweeper.py
 from pathlib import Path
 from . import config
 from .job_manager import JobManager
@@ -16,71 +15,76 @@ class TaskSweeper:
         tracker = self.manager.tracker
         if not tracker: return
 
-        # 找出所有 Extra 任务键
         extra_keys = [k for k in tracker.data.keys() if k.startswith("[Extra]")]
-        
         keys_to_remove = []
         for key in extra_keys:
-            # key 格式: [Extra]文件名
-            # 对应的文件名 stem
             stem = key.replace("[Extra]", "")
-            
-            # 检查文件是否存在
-            # 1. 输入文件 (.gjf / .inp)
             has_input = any((self.root_dir / f"{stem}{ext}").exists() for ext in config.VALID_EXTENSIONS)
-            
-            # 2. 输出文件 (.out / .log)
-            # 输出文件也应该在 extra_jobs 目录下
             has_output = any((self.root_dir / f"{stem}{ext}").exists() for ext in [".out", ".log"])
             
-            # 只有当输入和输出都不存在时，才视为"僵尸任务"进行删除
             if not has_input and not has_output:
                 keys_to_remove.append(key)
         
         if keys_to_remove:
-            # print(f"👻 Purging ghost jobs: {keys_to_remove}") # Debug用，可注释
             for k in keys_to_remove:
-                if k in tracker.data:
-                    del tracker.data[k]
+                if k in tracker.data: del tracker.data[k]
             tracker.save_data()
+
+    def scan(self):
+        """扫描所有 Extra 任务并更新状态到 Tracker"""
+        # --- 修复：先获取 tracker 并检查是否存在，消除 Pylance 警告 ---
+        tracker = self.manager.tracker
+        if not tracker: return
+
+        self.purge_ghost_jobs()
+        if not self.root_dir.exists(): return
+
+        all_jobs = list(self.root_dir.rglob("*.gjf")) + list(self.root_dir.rglob("*.inp"))
+        IGNORE_KEYWORDS = [".scfgrad", ".ctx", ".tmp", ".opt"]
+        
+        for job in all_jobs:
+            if any(k in job.name for k in IGNORE_KEYWORDS): continue
+
+            mol_name = f"[Extra]{job.stem}"
+            step_name = job.parent.name if job.parent != self.root_dir else "root"
+            
+            # 检查输出文件
+            out_file = job.with_suffix(".out")
+            if not out_file.exists():
+                out_file = job.with_suffix(".log")
+            
+            # 获取状态
+            status, err = self.manager.get_status_from_file(out_file)
+            
+            # 更新 Tracker (使用已确认非 None 的 tracker 变量)
+            tracker.finish_task(mol_name, step_name, status, err)
 
     def run(self) -> bool:
         """
-        扫描并执行一个任务。
-        Returns:
-            bool: 如果执行了任务返回 True，否则返回 False
+        寻找并执行一个新任务。
         """
-        # 0. 先清理僵尸任务
         self.purge_ghost_jobs()
 
-        # 1. 确保目录存在
-        if not self.root_dir.exists():
-            return False
+        if not self.root_dir.exists(): return False
 
-        # 2. 递归扫描所有 .gjf 和 .inp
         all_jobs = list(self.root_dir.rglob("*.gjf")) + list(self.root_dir.rglob("*.inp"))
         all_jobs.sort(key=lambda x: x.stat().st_mtime, reverse=False)
 
-        if not all_jobs:
-            return False
+        if not all_jobs: return False
 
-        # 定义需要忽略的文件名特征（如 ORCA 的中间文件）
         IGNORE_KEYWORDS = [".scfgrad", ".ctx", ".tmp", ".opt"] 
 
-        # 3. 遍历检查
         for job in all_jobs:
-            if any(k in job.name for k in IGNORE_KEYWORDS):
-                continue
+            if any(k in job.name for k in IGNORE_KEYWORDS): continue
 
             mol_name = f"[Extra]{job.stem}"
             step_name = job.parent.name if job.parent != self.root_dir else "root"
 
-            # 检查状态
             out_file = job.with_suffix(".out")
             status, _ = self.manager.get_status_from_file(out_file)
 
             if status == "MISSING":
-                print(f"\n🧹 Sweeper found new job: {job.name}")
+                # print(f"\n🧹 Sweeper found new job: {job.name}") 
                 success = self.manager.submit_and_wait(job, mol_name, step_name)
                 return True
             

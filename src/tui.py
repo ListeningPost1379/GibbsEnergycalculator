@@ -6,7 +6,8 @@ from typing import List
 import threading
 
 class GibbsApp(App):
-    # ... (CSS 和 BINDINGS 保持不变) ...
+    """一个现代化的 Btop 风格终端界面"""
+    
     CSS = """
     DataTable {
         height: 1fr;
@@ -43,11 +44,9 @@ class GibbsApp(App):
         self.processed_sweeps = set()
         self.main_col_keys = []
         self.sweep_col_keys = []
-        
-        # --- 新增：用于缓存上一次渲染的内容，防止重复刷新导致闪烁 ---
+        # 缓存用于防闪烁
         self.render_cache = {} 
 
-    # ... (compose 方法保持不变) ...
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Label("🔹 Main Workflow (Gibbs Energy)")
@@ -57,7 +56,6 @@ class GibbsApp(App):
         yield Static(id="status_bar", content="Initializing...")
         yield Footer()
 
-    # ... (on_mount 和 run_workflow 等保持不变) ...
     def on_mount(self) -> None:
         main_table = self.query_one("#main_table", DataTable)
         main_table.cursor_type = "row"
@@ -85,18 +83,10 @@ class GibbsApp(App):
         self.exit()
 
     def _smart_update(self, table: DataTable, row_key: str, col_keys: list, new_cells: list):
-        """
-        辅助方法：智能更新。
-        只有当内容发生变化时才调用 update_cell，避免界面闪烁。
-        """
         for i, content in enumerate(new_cells):
             if i >= len(col_keys): break
-            
-            # 生成唯一的缓存键：(行ID, 列名)
             col_key = col_keys[i]
             cache_key = (row_key, str(col_key))
-            
-            # 如果内容变了，或者缓存里没有，才更新
             if self.render_cache.get(cache_key) != content:
                 table.update_cell(row_key, col_key, content)
                 self.render_cache[cache_key] = content
@@ -116,9 +106,10 @@ class GibbsApp(App):
         else:
             mains = order 
 
+        current_main_rows = set() # 记录本轮存在的行
+        
         for mol in mains:
             mol_info = data.get(mol, {})
-            # ... (这部分生成 cells 的逻辑保持不变) ...
             if mol_info.get("xyz_missing"):
                 mol_disp = f"[red][X] {mol}[/red]"
             else:
@@ -135,18 +126,28 @@ class GibbsApp(App):
                     cells.append(self._fmt_status(mol_info.get(step, {})))
             res = mol_info.get("result_g")
             cells.append(f"[bold white]{res:.2f}[/]" if res else "")
-            # ... (生成 cells 结束) ...
 
             row_key = mol
+            current_main_rows.add(row_key) # 标记存在
+
             if row_key in self.processed_mains:
-                # --- 修改：使用智能更新 ---
                 self._smart_update(main_table, row_key, self.main_col_keys, cells)
             else:
                 main_table.add_row(*cells, key=row_key)
                 self.processed_mains.add(row_key)
 
+        # --- 新增：主表行删除逻辑 ---
+        # 如果 processed_mains 里有，但 current_main_rows 里没有，说明任务被删了
+        removed_mains = self.processed_mains - current_main_rows
+        for row_key in removed_mains:
+            main_table.remove_row(row_key)
+        self.processed_mains -= removed_mains
+
+
         # === 2. Sweep Table ===
         extras = sorted([k for k in data.keys() if k.startswith("[Extra]")])
+        current_sweep_rows = set() # 记录本轮存在的行
+
         for mol in extras:
             mol_info = data.get(mol, {})
             clean_name = mol.replace("[Extra]", "")
@@ -156,6 +157,8 @@ class GibbsApp(App):
                 if not isinstance(info, dict): continue
                 
                 row_key = f"{mol}::{step}"
+                current_sweep_rows.add(row_key) # 标记存在
+
                 status_str = self._fmt_status(info)
                 dur = info.get("duration_str", "")
                 err = info.get("error", "")
@@ -166,14 +169,19 @@ class GibbsApp(App):
                 ]
 
                 if row_key in self.processed_sweeps:
-                    # --- 修改：使用智能更新 ---
                     self._smart_update(sweep_table, row_key, self.sweep_col_keys, cells)
                 else:
                     sweep_table.add_row(*cells, key=row_key)
                     self.processed_sweeps.add(row_key)
 
+        # --- 新增：清扫表行删除逻辑 ---
+        removed_sweeps = self.processed_sweeps - current_sweep_rows
+        for row_key in removed_sweeps:
+            sweep_table.remove_row(row_key)
+        self.processed_sweeps -= removed_sweeps
+
+
     def _fmt_status(self, info):
-        # ... (保持不变) ...
         st = info.get("status", "PENDING")
         dur = info.get("duration_str", "")
         err = info.get("error", "")

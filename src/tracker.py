@@ -31,9 +31,10 @@ class StatusTracker:
         self._ensure_record(mol_name, step)
         self.data[mol_name][step]["status"] = "RUNNING"
         self.data[mol_name][step]["start_time"] = time.time()
+        # 任务重新开始时，也可以选择清空错误信息
+        self.data[mol_name][step]["error"] = "" 
         self.save_data()
 
-    # --- 回归初始的时间显示逻辑 ---
     @staticmethod
     def format_duration(seconds: float) -> str:
         if seconds is None: return ""
@@ -50,17 +51,18 @@ class StatusTracker:
         old_status = record.get("status", "PENDING")
         
         # 仅当任务“真正”刚跑完时（RUNNING -> DONE/ERROR），才结算时间
-        # 避免 main.py 重复扫描已完成任务时重置时间
         if old_status == "RUNNING" and status != "RUNNING":
             start_t = record.get("start_time")
             if start_t:
                 duration = time.time() - start_t
-                # 只有时间合理（比如小于1000小时）才更新，防止系统重启后读取旧start_time导致时间巨大
-                # 这里简单处理：只要计算了就用，配合 format_duration 显示
                 record["duration_str"] = self.format_duration(duration)
         
         record["status"] = status
-        if error_msg: record["error"] = error_msg
+        
+        # --- 修复：无条件更新 error 字段 ---
+        # 这样当任务成功(error_msg为空)时，旧的报错信息会被清除
+        record["error"] = error_msg 
+        
         self.save_data()
 
     def set_result(self, mol_name: str, g_val: float):

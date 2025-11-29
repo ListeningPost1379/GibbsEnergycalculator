@@ -21,7 +21,7 @@ DIRS = {
 VALID_EXTENSIONS = [".gjf", ".inp"]
 
 COMMAND_MAP = {
-    ".gjf": "g16 < {input} > {output}", 
+    ".gjf": "g09 < {input} > {output}", 
     ".inp": "/usr/local/quantum/orca/orca {input} > {output}",
 }
 
